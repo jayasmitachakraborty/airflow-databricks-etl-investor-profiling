@@ -1,0 +1,16 @@
+version: 2
+
+sources:
+  - name: investor_profiling
+    database: "{{ var('catalog') }}"
+    schema: "{{ var('schema_name') }}"
+    tables:
+      - name: bronze_investors
+        description: Upserted investor seeds from MySQL
+        loaded_at_field: ingested_at
+        freshness:
+          warn_after: {count: 36, period: hour}
+          error_after: {count: 72, period: hour}
+      - name: silver_investor_company_map
+      - name: silver_companies
+      - name: silver_company_classification

@@ -1,0 +1,22 @@
+name: investor_profiling
+version: "1.0.0"
+config-version: 2
+
+profile: investor_profiling
+
+vars:
+  catalog: "{{ env_var('DATABRICKS_CATALOG', 'main') }}"
+  schema_name: "{{ env_var('DATABRICKS_SCHEMA', 'investor_profiling') }}"
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+
+models:
+  investor_profiling:
+    staging:
+      +materialized: view
+    conformed:
+      +materialized: table
+    marts:
+      +materialized: table

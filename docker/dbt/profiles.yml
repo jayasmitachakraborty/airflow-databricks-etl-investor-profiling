@@ -1,0 +1,13 @@
+# Used inside the Airflow container (DBT_PROFILES_DIR=/opt/airflow/.dbt).
+# Tokens and host are read from the same env vars as the DAGs.
+investor_profiling:
+  target: dev
+  outputs:
+    dev:
+      type: databricks
+      catalog: "{{ env_var('DATABRICKS_CATALOG', 'main') }}"
+      schema: "{{ env_var('DATABRICKS_SCHEMA', 'investor_profiling') }}"
+      host: "{{ env_var('DATABRICKS_HOST') }}"
+      http_path: "{{ env_var('DATABRICKS_HTTP_PATH') }}"
+      token: "{{ env_var('DATABRICKS_TOKEN') }}"
+      threads: 4
