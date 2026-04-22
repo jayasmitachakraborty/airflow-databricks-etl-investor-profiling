@@ -98,13 +98,12 @@ CREATE TABLE IF NOT EXISTS {fq("silver_investor_company_map")} (
         f"""
 CREATE TABLE IF NOT EXISTS {fq("silver_company_classification")} (
   company_id STRING NOT NULL,
-  theme STRING NOT NULL,
-  main_category STRING NOT NULL,
-  subcategory STRING NOT NULL,
   classifier_version STRING NOT NULL,
-  confidence DOUBLE NOT NULL,
-  explanation STRING NOT NULL,
-  classified_at TIMESTAMP NOT NULL
+  classified_at TIMESTAMP NOT NULL,
+  is_built_world BOOLEAN NOT NULL,
+  theme STRING,
+  main_category STRING,
+  subcategory STRING
 ) USING DELTA
 """,
     ]

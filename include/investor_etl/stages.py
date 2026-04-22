@@ -5,20 +5,31 @@ from __future__ import annotations
 import os
 import uuid
 from urllib.parse import urlparse
+from collections import defaultdict
 
 from investor_etl.config import Settings, fully_qualified_table
 from investor_etl.databricks_sql import execute_sql, fetch_all
 from investor_etl.ddl import create_all_tables_sql
 from investor_etl.jina_client import fetch_url, utcnow
 from investor_etl.llm_client import (
-    CLASSIFICATION_SYSTEM,
+    BUILT_WORLD_SYSTEM,
     EXTRACTION_SYSTEM,
-    chat_openai_compatible,
+    MAIN_CATEGORY_SYSTEM,
+    NON_BUILT_WORLD_THEME_SYSTEM,
+    SUBCATEGORY_SYSTEM,
+    THEME_SYSTEM,
+    chat_completions_json,
 )
-from investor_etl.models import parse_classification, parse_portfolio_extractions
-from investor_etl.mysql_source import iter_investors
+from investor_etl.models import (
+    parse_built_world,
+    parse_main_category,
+    parse_portfolio_extractions,
+    parse_subcategory,
+    parse_theme,
+)
+from investor_etl.mysql_source import fetch_taxonomy_rows, iter_investors
 from investor_etl.portfolio_detection import extract_candidate_urls, pick_best_portfolio_url
-from investor_etl.sql_escape import lit
+from investor_etl.sql_escape import lit, lit_float
 
 
 def normalize_domain(url: str) -> str:
@@ -257,7 +268,7 @@ INSERT INTO {t_fetch} VALUES (
 
         body = fr.raw_text or fr.raw_markdown or ""
         user_prompt = f"Portfolio page text:\n\n{body[:120000]}"
-        raw = chat_openai_compatible(
+        raw = chat_completions_json(
             settings,
             model=settings.llm_extraction_model,
             system_prompt=EXTRACTION_SYSTEM,
@@ -340,7 +351,6 @@ INSERT INTO {t_fetch} VALUES (
 
         homepage_text = fr.raw_text or fr.raw_markdown or ""
         about_text = homepage_text[:200000]
-        domain_last_seen[nd] = now
 
         execute_sql(
             settings,
@@ -434,10 +444,41 @@ WHEN NOT MATCHED THEN INSERT (
     return upserts
 
 
+def _taxonomy_maps(settings: Settings):
+    rows = fetch_taxonomy_rows(settings)
+
+    themes: set[str] = set()
+    main_by_theme: dict[str, set[str]] = defaultdict(set)
+    sub_by_theme_main: dict[tuple[str, str], set[str]] = defaultdict(set)
+
+    for r in rows:
+        if not r.theme or not r.main_category or not r.subcategory:
+            continue
+        themes.add(r.theme)
+        main_by_theme[r.theme].add(r.main_category)
+        sub_by_theme_main[(r.theme, r.main_category)].add(r.subcategory)
+
+    theme_list = sorted(themes)
+    main_by_theme_sorted = {k: sorted(v) for k, v in main_by_theme.items()}
+    sub_by_theme_main_sorted = {k: sorted(v) for k, v in sub_by_theme_main.items()}
+
+    if not theme_list:
+        raise RuntimeError(
+            "No taxonomy rows loaded from MySQL. Check MYSQL_TAXONOMY_DATABASE and noa_taxonomy.taxonomy_list."
+        )
+    return theme_list, main_by_theme_sorted, sub_by_theme_main_sorted
+
+
 def stage4_classify(settings: Settings, classifier_version: str | None = None) -> int:
+    """
+    Hierarchical classification: built world gate, then theme -> main_category -> subcategory
+    (each step uses its own model + strict JSON validation).
+    """
     version = classifier_version or os.getenv("CLASSIFIER_VERSION", "v1")
     t_comp = fully_qualified_table(settings, "silver_companies")
     t_cls = fully_qualified_table(settings, "silver_company_classification")
+
+    theme_list, main_by_theme, sub_by_theme_main = _taxonomy_maps(settings)
 
     companies = fetch_all(
         settings,
@@ -453,26 +494,109 @@ LEFT ANTI JOIN {t_cls} cl
     now = utcnow().strftime("%Y-%m-%d %H:%M:%S")
     for company_id, home_txt, about_txt in companies:
         blob = f"{home_txt or ''}\n\n{about_txt or ''}"[:120000]
-        user_prompt = f"Company website content:\n\n{blob}"
-        raw = chat_openai_compatible(
+        base_user = f"Company website content:\n\n{blob}"
+
+        bw_raw = chat_completions_json(
             settings,
-            model=settings.llm_classification_model,
-            system_prompt=CLASSIFICATION_SYSTEM,
-            user_prompt=user_prompt,
+            model=settings.llm_built_world_model,
+            system_prompt=BUILT_WORLD_SYSTEM,
+            user_prompt=base_user,
         )
-        cls = parse_classification(raw)
+        bw = parse_built_world(bw_raw)
+
+        theme = None
+        main_cat = None
+        subcat = None
+
+        if bw.is_built_world:
+            theme_constraints = (
+                "Allowed themes (choose exactly ONE):\n"
+                + "\n".join(f"- {t}" for t in theme_list)
+            )
+            th_user = theme_constraints + "\n\n" + base_user
+            th_raw = chat_completions_json(
+                settings,
+                model=settings.llm_theme_model,
+                system_prompt=THEME_SYSTEM,
+                user_prompt=th_user,
+            )
+            th = parse_theme(th_raw)
+            theme = th.theme
+
+            allowed_main = main_by_theme.get(th.theme) or []
+            if not allowed_main:
+                allowed_main = sorted(
+                    {mc for mcs in main_by_theme.values() for mc in mcs}
+                )
+            mc_user = (
+                "Selected theme: "
+                f"{th.theme}\n\n"
+                "Allowed main_category (choose exactly ONE):\n"
+                + "\n".join(f"- {c}" for c in allowed_main)
+                + "\n\n"
+                + base_user
+            )
+            mc_raw = chat_completions_json(
+                settings,
+                model=settings.llm_main_category_model,
+                system_prompt=MAIN_CATEGORY_SYSTEM,
+                user_prompt=mc_user,
+            )
+            mc = parse_main_category(mc_raw)
+            main_cat = mc.main_category
+
+            allowed_sub = sub_by_theme_main.get((th.theme, mc.main_category)) or []
+            if not allowed_sub:
+                allowed_sub = sorted(
+                    {
+                        sc
+                        for scs in sub_by_theme_main.values()
+                        for sc in scs
+                    }
+                )
+            sc_user = (
+                f"Selected theme: {th.theme}\n"
+                f"Selected main_category: {mc.main_category}\n\n" + base_user
+            )
+            sc_user = (
+                f"Selected theme: {th.theme}\n"
+                f"Selected main_category: {mc.main_category}\n\n"
+                "Allowed subcategory (choose exactly ONE):\n"
+                + "\n".join(f"- {s}" for s in allowed_sub)
+                + "\n\n"
+                + base_user
+            )
+            sct_raw = chat_completions_json(
+                settings,
+                model=settings.llm_subcategory_model,
+                system_prompt=SUBCATEGORY_SYSTEM,
+                user_prompt=sc_user,
+            )
+            sct = parse_subcategory(sct_raw)
+            subcat = sct.subcategory
+        else:
+            # Non-built-world: still generate a best-fit theme string for reporting.
+            th_raw = chat_completions_json(
+                settings,
+                model=settings.llm_theme_model,
+                system_prompt=NON_BUILT_WORLD_THEME_SYSTEM,
+                user_prompt=base_user,
+            )
+            th = parse_theme(th_raw)
+            theme = th.theme
+
+        is_bw = "true" if bw.is_built_world else "false"
         execute_sql(
             settings,
             f"""
 INSERT INTO {t_cls} VALUES (
   {lit(str(company_id))},
-  {lit(cls.theme)},
-  {lit(cls.main_category)},
-  {lit(cls.subcategory)},
   {lit(version)},
-  {cls.confidence},
-  {lit(cls.rationale)},
-  TIMESTAMP('{now}')
+  TIMESTAMP('{now}'),
+  {is_bw},
+  {lit(theme)},
+  {lit(main_cat)},
+  {lit(subcat)}
 )
 """,
         )

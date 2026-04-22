@@ -23,12 +23,22 @@ class PortfolioCompanyExtract(BaseModel):
         return u
 
 
-class CompanyClassification(BaseModel):
+class BuiltWorldClassification(BaseModel):
+    """Gate: whether the company participates in the built-world / physical asset ecosystem."""
+
+    is_built_world: bool
+
+
+class ThemeClassification(BaseModel):
     theme: str = Field(..., min_length=1)
+
+
+class MainCategoryClassification(BaseModel):
     main_category: str = Field(..., min_length=1)
+
+
+class SubcategoryClassification(BaseModel):
     subcategory: str = Field(..., min_length=1)
-    confidence: float = Field(..., ge=0.0, le=1.0)
-    rationale: str = Field(..., min_length=1)
 
 
 def parse_portfolio_extractions(payload: dict[str, Any]) -> list[PortfolioCompanyExtract]:
@@ -41,5 +51,17 @@ def parse_portfolio_extractions(payload: dict[str, Any]) -> list[PortfolioCompan
     return [PortfolioCompanyExtract.model_validate(item) for item in raw_list]
 
 
-def parse_classification(payload: dict[str, Any]) -> CompanyClassification:
-    return CompanyClassification.model_validate(payload)
+def parse_built_world(payload: dict[str, Any]) -> BuiltWorldClassification:
+    return BuiltWorldClassification.model_validate(payload)
+
+
+def parse_theme(payload: dict[str, Any]) -> ThemeClassification:
+    return ThemeClassification.model_validate(payload)
+
+
+def parse_main_category(payload: dict[str, Any]) -> MainCategoryClassification:
+    return MainCategoryClassification.model_validate(payload)
+
+
+def parse_subcategory(payload: dict[str, Any]) -> SubcategoryClassification:
+    return SubcategoryClassification.model_validate(payload)

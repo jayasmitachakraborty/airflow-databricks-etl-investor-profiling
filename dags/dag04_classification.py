@@ -1,4 +1,4 @@
-"""DAG 4 — Theme / category classification + conformed dimensions (via dbt downstream)."""
+"""DAG 4 — Hierarchical LLM classification: built world gate, then theme → main category → subcategory (dbt marts downstream)."""
 
 from __future__ import annotations
 
@@ -38,5 +38,8 @@ with DAG(
     tags=["investor", "silver", "llm", "classification"],
 ) as dag:
     prepare = PythonOperator(task_id="ensure_tables", python_callable=task_prepare)
-    classify = PythonOperator(task_id="llm_classify_companies", python_callable=task_classify)
+    classify = PythonOperator(
+        task_id="hierarchical_llm_classify",
+        python_callable=task_classify,
+    )
     prepare >> classify

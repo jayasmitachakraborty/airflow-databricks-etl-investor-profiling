@@ -26,6 +26,7 @@ class Settings:
     mysql_password: str
     mysql_database: str
     mysql_investors_query: str
+    mysql_taxonomy_database: str
 
     databricks_host: str
     databricks_http_path: str
@@ -36,13 +37,32 @@ class Settings:
     jina_api_key: str | None
     jina_reader_base_url: str
 
-    llm_api_base: str | None
-    llm_api_key: str | None
+    openai_api_key: str | None
+    openai_base_url: str
     llm_extraction_model: str
     llm_classification_model: str
+    llm_built_world_model: str
+    llm_theme_model: str
+    llm_main_category_model: str
+    llm_subcategory_model: str
 
     @classmethod
     def from_env(cls) -> "Settings":
+        cls_default = os.getenv("LLM_CLASSIFICATION_MODEL", "gpt-4o-mini")
+
+        raw_base = _opt("OPENAI_BASE_URL") or _opt("OPENAI_API_BASE")
+        legacy_endpoint = _opt("DATABRICKS_MODEL_ENDPOINT")
+        if raw_base:
+            openai_base_url = raw_base.rstrip("/")
+        elif legacy_endpoint:
+            ep = legacy_endpoint.rstrip("/")
+            if ep.endswith("/chat/completions"):
+                openai_base_url = ep[: -len("/chat/completions")].rstrip("/")
+            else:
+                openai_base_url = ep.rstrip("/")
+        else:
+            openai_base_url = "https://api.openai.com/v1"
+
         return cls(
             mysql_host=_req("MYSQL_HOST", "localhost"),
             mysql_port=int(os.getenv("MYSQL_PORT", "3306")),
@@ -53,6 +73,7 @@ class Settings:
                 "MYSQL_INVESTORS_QUERY",
                 "SELECT investor_id, investor_name, website AS source_website FROM investors",
             ),
+            mysql_taxonomy_database=os.getenv("MYSQL_TAXONOMY_DATABASE", "noa_taxonomy"),
             databricks_host=_req("DATABRICKS_HOST"),
             databricks_http_path=_req("DATABRICKS_HTTP_PATH"),
             databricks_token=_req("DATABRICKS_TOKEN"),
@@ -62,12 +83,14 @@ class Settings:
             jina_reader_base_url=os.getenv(
                 "JINA_READER_BASE_URL", "https://r.jina.ai"
             ),
-            llm_api_base=_opt("DATABRICKS_MODEL_ENDPOINT"),
-            llm_api_key=_opt("DATABRICKS_TOKEN"),
-            llm_extraction_model=os.getenv("LLM_EXTRACTION_MODEL", "databricks-meta-llama-3-3-70b-instruct"),
-            llm_classification_model=os.getenv(
-                "LLM_CLASSIFICATION_MODEL", "databricks-meta-llama-3-3-70b-instruct"
-            ),
+            openai_api_key=_opt("OPENAI_API_KEY") or _opt("DATABRICKS_TOKEN"),
+            openai_base_url=openai_base_url,
+            llm_extraction_model=os.getenv("LLM_EXTRACTION_MODEL", "gpt-4o-mini"),
+            llm_classification_model=cls_default,
+            llm_built_world_model=os.getenv("LLM_BUILT_WORLD_MODEL") or cls_default,
+            llm_theme_model=os.getenv("LLM_THEME_MODEL") or cls_default,
+            llm_main_category_model=os.getenv("LLM_MAIN_CATEGORY_MODEL") or cls_default,
+            llm_subcategory_model=os.getenv("LLM_SUBCATEGORY_MODEL") or cls_default,
         )
 
 
