@@ -126,7 +126,7 @@ This compose stack is for **local development**. In production, use a managed me
 | `DATABRICKS_HOST` | Workspace host (no `https://`) |
 | `DATABRICKS_HTTP_PATH` | SQL warehouse HTTP path (SQL Warehouses → connection details in the Databricks UI) |
 | `DATABRICKS_TOKEN` | Personal access token with access to the catalog/schema (user settings → Developer → access tokens) |
-| `DATABRICKS_CATALOG` | Unity Catalog catalog (default `main`) |
+| `DATABRICKS_CATALOG` | Unity Catalog catalog (default `investor_profiling`) |
 | `DATABRICKS_SCHEMA` | Schema for raw and silver tables (default `investor_profiling`) |
 
 ### Jina Reader (DAGs 1–3)

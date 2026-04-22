@@ -77,7 +77,7 @@ class Settings:
             databricks_host=_req("DATABRICKS_HOST"),
             databricks_http_path=_req("DATABRICKS_HTTP_PATH"),
             databricks_token=_req("DATABRICKS_TOKEN"),
-            databricks_catalog=_req("DATABRICKS_CATALOG", "main"),
+            databricks_catalog=_req("DATABRICKS_CATALOG", "investor_profiling"),
             databricks_schema=_req("DATABRICKS_SCHEMA", "investor_profiling"),
             jina_api_key=_opt("JINA_API_KEY"),
             jina_reader_base_url=os.getenv(
