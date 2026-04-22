@@ -30,7 +30,7 @@ def task_dbt():
 
 
 with DAG(
-    dag_id="dbt_build_marts",
+    dag_id="05_dbt_build_marts",
     default_args=DEFAULT_ARGS,
     schedule_interval=None,
     start_date=days_ago(1),

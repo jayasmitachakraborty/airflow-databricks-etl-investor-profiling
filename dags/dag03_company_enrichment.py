@@ -30,7 +30,7 @@ def task_enrich():
 
 
 with DAG(
-    dag_id="company_enrichment",
+    dag_id="03_company_enrichment",
     default_args=DEFAULT_ARGS,
     schedule_interval=None,
     start_date=days_ago(1),

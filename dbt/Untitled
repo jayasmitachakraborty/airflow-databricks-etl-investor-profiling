@@ -1,0 +1,6 @@
+Traceback (most recent call last):
+  File "/opt/airflow/include/investor_etl/stages.py", line 14, in <module>
+    from investor_etl.llm_client import (
+  File "/opt/airflow/include/investor_etl/llm_client.py", line 10, in <module>
+    from openai import OpenAI
+ModuleNotFoundError: No module named 'openai'

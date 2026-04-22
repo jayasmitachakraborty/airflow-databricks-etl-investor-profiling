@@ -30,7 +30,7 @@ def task_classify():
 
 
 with DAG(
-    dag_id="company_classification",
+    dag_id="04_company_classification",
     default_args=DEFAULT_ARGS,
     schedule_interval=None,
     start_date=days_ago(1),

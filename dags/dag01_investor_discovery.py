@@ -58,7 +58,7 @@ def task_detect_portfolio_urls():
 
 
 with DAG(
-    dag_id="investor_discovery_raw_crawl",
+    dag_id="01_investor_discovery_raw_crawl",
     default_args=DEFAULT_ARGS,
     schedule_interval="@daily",
     start_date=days_ago(1),
