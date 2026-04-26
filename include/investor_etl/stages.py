@@ -27,7 +27,7 @@ from investor_etl.models import (
     parse_subcategory,
     parse_theme,
 )
-from investor_etl.mysql_source import fetch_taxonomy_rows, iter_investors
+from investor_etl.mysql_source import InvestorRow, fetch_taxonomy_rows, iter_investors
 from investor_etl.portfolio_detection import extract_candidate_urls, pick_best_portfolio_url
 from investor_etl.sql_escape import lit, lit_float
 
@@ -58,16 +58,25 @@ def stage1_mysql_to_bronze(settings: Settings, source_system: str = "mysql") -> 
     t = fully_qualified_table(settings, "bronze_investors")
     now = utcnow().strftime("%Y-%m-%d %H:%M:%S")
     count = 0
-    for row in inv:
+
+    def _chunks(xs: list[InvestorRow], size: int):
+        for i in range(0, len(xs), size):
+            yield xs[i : i + size]
+
+    # One MERGE per chunk instead of one MERGE per investor row. This avoids thousands of
+    # round-trips to the warehouse and reduces the chance of the connector timing out
+    # while polling `GetOperationStatus` for a long-running statement.
+    for chunk in _chunks(inv, size=500):
+        values_rows = ",\n  ".join(
+            f"({lit(r.investor_id)}, {lit(r.investor_name)}, {lit(r.source_website)}, {lit(source_system)}, TIMESTAMP('{now}'))"
+            for r in chunk
+        )
         sql = f"""
 MERGE INTO {t} AS t
-USING (SELECT
-  {lit(row.investor_id)} AS investor_id,
-  {lit(row.investor_name)} AS investor_name,
-  {lit(row.source_website)} AS source_website,
-  {lit(source_system)} AS source_system,
-  TIMESTAMP('{now}') AS ingested_at
-) AS s
+USING (
+  VALUES
+  {values_rows}
+) AS s(investor_id, investor_name, source_website, source_system, ingested_at)
 ON t.investor_id = s.investor_id
 WHEN MATCHED THEN UPDATE SET
   investor_name = s.investor_name,
@@ -81,7 +90,7 @@ WHEN NOT MATCHED THEN INSERT (
 )
 """
         execute_sql(settings, sql)
-        count += 1
+        count += len(chunk)
     return count
 
 
