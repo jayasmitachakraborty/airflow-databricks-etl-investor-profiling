@@ -74,9 +74,15 @@ def stage1_mysql_to_bronze(settings: Settings, source_system: str = "mysql") -> 
         sql = f"""
 MERGE INTO {t} AS t
 USING (
-  VALUES
+  SELECT
+    col1 AS investor_id,
+    col2 AS investor_name,
+    col3 AS source_website,
+    col4 AS source_system,
+    col5 AS ingested_at
+  FROM VALUES
   {values_rows}
-) AS s(investor_id, investor_name, source_website, source_system, ingested_at)
+) AS s
 ON t.investor_id = s.investor_id
 WHEN MATCHED THEN UPDATE SET
   investor_name = s.investor_name,
