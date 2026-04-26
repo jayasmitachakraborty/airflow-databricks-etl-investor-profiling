@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator, Optional
 
 from investor_etl.config import Settings
 
@@ -32,21 +32,47 @@ def _cursor_conn(settings: Settings):
         conn.close()
 
 
-def execute_sql(settings: Settings, sql: str) -> None:
+@contextmanager
+def databricks_cursor(settings: Settings) -> Iterator[Any]:
+    """
+    Public cursor context manager.
+
+    Use this to reuse a single warehouse session for many statements, which avoids
+    repeated OpenSession/CloseSession overhead in tight loops.
+    """
     with _cursor_conn(settings) as cur:
+        yield cur
+
+
+def execute_sql(settings: Settings, sql: str, *, cur: Optional[Any] = None) -> None:
+    if cur is not None:
         cur.execute(sql)
+        return
+    with _cursor_conn(settings) as c:
+        c.execute(sql)
 
 
-def execute_many(settings: Settings, statements: Iterable[str]) -> None:
-    with _cursor_conn(settings) as cur:
+def execute_many(
+    settings: Settings, statements: Iterable[str], *, cur: Optional[Any] = None
+) -> None:
+    if cur is not None:
         for stmt in statements:
             cur.execute(stmt)
+        return
+    with _cursor_conn(settings) as c:
+        for stmt in statements:
+            c.execute(stmt)
 
 
-def fetch_all(settings: Settings, sql: str) -> list[tuple[Any, ...]]:
-    with _cursor_conn(settings) as cur:
+def fetch_all(
+    settings: Settings, sql: str, *, cur: Optional[Any] = None
+) -> list[tuple[Any, ...]]:
+    if cur is not None:
         cur.execute(sql)
         return cur.fetchall()
+    with _cursor_conn(settings) as c:
+        c.execute(sql)
+        return c.fetchall()
 
 
 def fetch_scalar(settings: Settings, sql: str) -> Any:

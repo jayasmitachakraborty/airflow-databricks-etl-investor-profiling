@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 from collections import defaultdict
 
 from investor_etl.config import Settings, fully_qualified_table
-from investor_etl.databricks_sql import execute_sql, fetch_all
+from investor_etl.databricks_sql import databricks_cursor, execute_sql, fetch_all
 from investor_etl.ddl import create_all_tables_sql
 from investor_etl.jina_client import fetch_url, utcnow
 from investor_etl.llm_client import (
@@ -104,21 +104,23 @@ def stage1_fetch_homepages(settings: Settings) -> int:
     t_inv = fully_qualified_table(settings, "bronze_investors")
     t_fetch = fully_qualified_table(settings, "bronze_web_fetches")
     t_pages = fully_qualified_table(settings, "silver_investor_pages")
-    rows = fetch_all(
-        settings,
-        f"SELECT investor_id, source_website FROM {t_inv}",
-    )
-    n = 0
-    for investor_id, website in rows:
-        fr = fetch_url(settings, website)
-        fetch_id = str(uuid.uuid4())
-        now = utcnow().strftime("%Y-%m-%d %H:%M:%S")
-        crawl_status = (
-            "success"
-            if fr.http_status and 200 <= fr.http_status < 400
-            else "error"
+    with databricks_cursor(settings) as cur:
+        rows = fetch_all(
+            settings,
+            f"SELECT investor_id, source_website FROM {t_inv}",
+            cur=cur,
         )
-        sql_ins = f"""
+        n = 0
+        for investor_id, website in rows:
+            fr = fetch_url(settings, website)
+            fetch_id = str(uuid.uuid4())
+            now = utcnow().strftime("%Y-%m-%d %H:%M:%S")
+            crawl_status = (
+                "success"
+                if fr.http_status and 200 <= fr.http_status < 400
+                else "error"
+            )
+            sql_ins = f"""
 INSERT INTO {t_fetch} VALUES (
   {lit(fetch_id)},
   {lit("investor")},
@@ -134,9 +136,9 @@ INSERT INTO {t_fetch} VALUES (
   {lit(crawl_status)}
 )
 """
-        execute_sql(settings, sql_ins)
+            execute_sql(settings, sql_ins, cur=cur)
 
-        merge_pages = f"""
+            merge_pages = f"""
 MERGE INTO {t_pages} AS t
 USING (SELECT
   {lit(str(investor_id))} AS investor_id,
@@ -156,9 +158,9 @@ WHEN NOT MATCHED THEN INSERT (
   s.investor_id, s.homepage_url, s.portfolio_url, s.detection_method, s.detection_confidence, s.last_verified_at
 )
 """
-        execute_sql(settings, merge_pages)
-        n += 1
-    return n
+            execute_sql(settings, merge_pages, cur=cur)
+            n += 1
+        return n
 
 
 def stage1_detect_portfolio_candidates(settings: Settings) -> int:
