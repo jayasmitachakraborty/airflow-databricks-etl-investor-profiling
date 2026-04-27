@@ -47,6 +47,17 @@ def stable_company_id(normalized_domain: str) -> str:
     return str(uuid.uuid5(ns, normalized_domain))
 
 
+def _valid_homepage_url(website: str | None) -> bool:
+    if website is None:
+        return False
+    s = str(website).strip()
+    if not s:
+        return False
+    if s.lower() in ("none", "null", "nan"):
+        return False
+    return True
+
+
 def ensure_schema_and_tables(settings: Settings) -> None:
     from investor_etl.databricks_sql import execute_many
 
@@ -112,7 +123,10 @@ def stage1_fetch_homepages(settings: Settings) -> int:
         )
         n = 0
         for investor_id, website in rows:
-            fr = fetch_url(settings, website)
+            if not _valid_homepage_url(website):
+                continue
+            web = str(website).strip()
+            fr = fetch_url(settings, web)
             fetch_id = str(uuid.uuid4())
             now = utcnow().strftime("%Y-%m-%d %H:%M:%S")
             crawl_status = (
@@ -142,7 +156,7 @@ INSERT INTO {t_fetch} VALUES (
 MERGE INTO {t_pages} AS t
 USING (SELECT
   {lit(str(investor_id))} AS investor_id,
-  {lit(website)} AS homepage_url,
+  {lit(web)} AS homepage_url,
   CAST(NULL AS STRING) AS portfolio_url,
   {lit("seed")} AS detection_method,
   CAST(NULL AS DOUBLE) AS detection_confidence,

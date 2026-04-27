@@ -30,7 +30,7 @@ def _hash_content(text: str | None) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def fetch_url(settings: Settings, url: str, timeout_s: float = 60.0) -> JinaFetchResult:
+def fetch_url(settings: Settings, url: str, timeout_s: float = 120.0) -> JinaFetchResult:
     """
     Uses Jina Reader: GET {base}/{url} with optional Authorization header.
     See https://jina.ai/reader
@@ -40,7 +40,8 @@ def fetch_url(settings: Settings, url: str, timeout_s: float = 60.0) -> JinaFetc
     if settings.jina_api_key:
         headers["Authorization"] = f"Bearer {settings.jina_api_key}"
 
-    with httpx.Client(timeout=timeout_s) as client:
+    timeout = httpx.Timeout(timeout_s, connect=min(30.0, timeout_s))
+    with httpx.Client(timeout=timeout) as client:
         resp = client.get(reader_url, headers=headers)
 
     body_text = resp.text
