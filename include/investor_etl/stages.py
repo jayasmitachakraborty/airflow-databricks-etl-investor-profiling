@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import os
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
 from collections import defaultdict
 
 from investor_etl.config import Settings, fully_qualified_table
 from investor_etl.databricks_sql import databricks_cursor, execute_sql, fetch_all
 from investor_etl.ddl import create_all_tables_sql
-from investor_etl.jina_client import fetch_url, utcnow
+from investor_etl.jina_client import JinaFetchResult, fetch_url, utcnow
 from investor_etl.llm_client import (
     BUILT_WORLD_SYSTEM,
     EXTRACTION_SYSTEM,
@@ -115,52 +116,103 @@ def stage1_fetch_homepages(settings: Settings) -> int:
     t_inv = fully_qualified_table(settings, "bronze_investors")
     t_fetch = fully_qualified_table(settings, "bronze_web_fetches")
     t_pages = fully_qualified_table(settings, "silver_investor_pages")
+
+    batch_size = int(os.getenv("HOMEPAGE_FETCH_BATCH_SIZE", "50"))
+    max_workers = int(os.getenv("HOMEPAGE_FETCH_WORKERS", "20"))
+
+    def _chunks(xs: list[tuple[str, str]], size: int):
+        for i in range(0, len(xs), size):
+            yield xs[i : i + size]
+
+    def _safe_fetch(web: str) -> JinaFetchResult:
+        try:
+            return fetch_url(settings, web)
+        except Exception:
+            # Keep the pipeline moving; record an error row instead of failing the DAG.
+            return JinaFetchResult(
+                requested_url=web,
+                final_url=None,
+                http_status=None,
+                raw_text=None,
+                raw_markdown=None,
+                raw_json=None,
+                content_hash="",
+            )
+
     with databricks_cursor(settings) as cur:
         rows = fetch_all(
             settings,
             f"SELECT investor_id, source_website FROM {t_inv}",
             cur=cur,
         )
-        n = 0
+        targets: list[tuple[str, str]] = []
         for investor_id, website in rows:
             if not _valid_homepage_url(website):
                 continue
-            web = str(website).strip()
-            fr = fetch_url(settings, web)
-            fetch_id = str(uuid.uuid4())
+            targets.append((str(investor_id), str(website).strip()))
+
+        n = 0
+        for batch in _chunks(targets, size=batch_size):
             now = utcnow().strftime("%Y-%m-%d %H:%M:%S")
-            crawl_status = (
-                "success"
-                if fr.http_status and 200 <= fr.http_status < 400
-                else "error"
+
+            # Fetch in parallel (network-bound), but write to Databricks in a single thread.
+            fetched: list[tuple[str, str, JinaFetchResult]] = []
+            with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                fut_to_inv = {ex.submit(_safe_fetch, web): (investor_id, web) for investor_id, web in batch}
+                for fut in as_completed(fut_to_inv):
+                    investor_id, web = fut_to_inv[fut]
+                    fr = fut.result()
+                    fetched.append((investor_id, web, fr))
+
+            if not fetched:
+                continue
+
+            # Batch INSERT into bronze_web_fetches.
+            values_rows = ",\n  ".join(
+                "("
+                + ", ".join(
+                    [
+                        lit(str(uuid.uuid4())),
+                        lit("investor"),
+                        lit(investor_id),
+                        lit(fr.requested_url),
+                        lit(fr.final_url),
+                        str(fr.http_status) if fr.http_status is not None else "NULL",
+                        f"TIMESTAMP('{now}')",
+                        lit(fr.raw_text),
+                        lit(fr.raw_markdown),
+                        lit(fr.raw_json),
+                        lit(fr.content_hash),
+                        lit(
+                            "success"
+                            if fr.http_status and 200 <= fr.http_status < 400
+                            else "error"
+                        ),
+                    ]
+                )
+                + ")"
+                for investor_id, _web, fr in fetched
             )
             sql_ins = f"""
-INSERT INTO {t_fetch} VALUES (
-  {lit(fetch_id)},
-  {lit("investor")},
-  {lit(str(investor_id))},
-  {lit(fr.requested_url)},
-  {lit(fr.final_url)},
-  {fr.http_status if fr.http_status is not None else "NULL"},
-  TIMESTAMP('{now}'),
-  {lit(fr.raw_text)},
-  {lit(fr.raw_markdown)},
-  {lit(fr.raw_json)},
-  {lit(fr.content_hash)},
-  {lit(crawl_status)}
-)
+INSERT INTO {t_fetch} VALUES
+  {values_rows}
 """
             execute_sql(settings, sql_ins, cur=cur)
 
+            # Batch MERGE into silver_investor_pages (seed homepage URL + last_verified_at).
+            merge_values = ",\n  ".join(
+                f"({lit(investor_id)}, {lit(web)}, TIMESTAMP('{now}'))"
+                for investor_id, web, _fr in fetched
+            )
             merge_pages = f"""
 MERGE INTO {t_pages} AS t
-USING (SELECT
-  {lit(str(investor_id))} AS investor_id,
-  {lit(web)} AS homepage_url,
-  CAST(NULL AS STRING) AS portfolio_url,
-  {lit("seed")} AS detection_method,
-  CAST(NULL AS DOUBLE) AS detection_confidence,
-  TIMESTAMP('{now}') AS last_verified_at
+USING (
+  SELECT
+    col1 AS investor_id,
+    col2 AS homepage_url,
+    col3 AS last_verified_at
+  FROM VALUES
+  {merge_values}
 ) AS s
 ON t.investor_id = s.investor_id
 WHEN MATCHED THEN UPDATE SET
@@ -169,11 +221,13 @@ WHEN MATCHED THEN UPDATE SET
 WHEN NOT MATCHED THEN INSERT (
   investor_id, homepage_url, portfolio_url, detection_method, detection_confidence, last_verified_at
 ) VALUES (
-  s.investor_id, s.homepage_url, s.portfolio_url, s.detection_method, s.detection_confidence, s.last_verified_at
+  s.investor_id, s.homepage_url, CAST(NULL AS STRING), {lit("seed")}, CAST(NULL AS DOUBLE), s.last_verified_at
 )
 """
             execute_sql(settings, merge_pages, cur=cur)
-            n += 1
+
+            n += len(fetched)
+
         return n
 
 
